@@ -27,9 +27,8 @@
 
 ### 方法 1：下载 EXE（推荐，零门槛）
 
-1. 打开dist文件夹
-2. 下载最新版的 `StickAnalyzer.exe`
-3. 双击运行即可，不需要安装 Python
+1. 下载最新版的 `StickAnalyzer.exe`
+2. 双击运行即可，不需要安装 Python
 
 ### 方法 2：源码运行
 
