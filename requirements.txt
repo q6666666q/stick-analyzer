@@ -1,0 +1,7 @@
+XInput-Python>=0.4.0
+matplotlib>=3.7.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# 可选：仅在打包 EXE 时需要
+# pyinstaller>=6.0.0
