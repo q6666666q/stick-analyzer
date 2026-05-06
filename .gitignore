@@ -270,11 +270,6 @@ $RECYCLE.BIN/
 *.tmp
 *.old
 
-# 压缩包（一般不直接放仓库里）
-*.zip
-*.7z
-*.rar
-*.tar.gz
 
 # 证书 / 密钥（绝对不能上传）
 *.pem
