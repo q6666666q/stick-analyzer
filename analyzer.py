@@ -106,7 +106,7 @@ def load_csv(path: Path) -> tuple:
 def get_stability_thresholds(metadata: dict) -> dict:
     """根据 RC 动感强度等级调整稳定度阈值。
 
-    优先用 rc_ads_intensity 字段（v2.5+ 新格式），向后兼容老格式 rc_ads（数值）。
+    优先用 rc_ads_intensity 字段（动感强度等级），向后兼容老格式 rc_ads（数值）。
     """
     # 默认（中性 / 无 RC）
     thresholds = {
@@ -696,7 +696,7 @@ def main():
     thresholds = get_stability_thresholds(metadata)
 
     if "fire" not in df.columns:
-        print(f"[X] CSV 缺少 fire 列，确保用 v2.0 的 stick_logger.py 记录")
+        print(f"[X] CSV 缺少 fire 列，请用本工具最新版本的 stick_logger.py 重新录制")
         sys.exit(1)
 
     bursts = detect_fire_bursts(df, args.min_duration)
