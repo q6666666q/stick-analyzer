@@ -205,36 +205,98 @@ BUTTON_DISPLAY_NAMES: dict[str, dict[str, str]] = {
 
 
 # ==================== pygame 按键索引映射 ====================
-# pygame 不同手柄的按键索引不一样，需要根据 GUID 或名字判断布局
-# 这里只列常见情况；不在表中的按 LAYOUT_GENERIC 处理
+# !!! 重要 !!!
+# pygame 在不同手柄上的 button index 完全不同：
+# 1. 对于 XBOX 风格手柄（XInput 协议），pygame 暴露的是 Joystick API（不是 SDL GameController），
+#    button 索引与 SDL GameController 不同
+# 2. 对于 PS 系列（DualShock/DualSense），pygame 走 SDL GameController 抽象，
+#    与 SDL GameController 文档一致
+# 所以需要分别维护两套映射表
 
-# DualSense / DualSense Edge / DualShock 4（pygame 在 SDL2 GameController 抽象下）
-# 注意：pygame 的 button 索引和 SDL2 GameController 一致，
-# 见 https://wiki.libsdl.org/SDL2/SDL_GameControllerButton
-SDL_BUTTON_TO_LOGICAL = {
-    0: "ACTION_SOUTH",      # SDL_CONTROLLER_BUTTON_A
-    1: "ACTION_EAST",       # SDL_CONTROLLER_BUTTON_B
-    2: "ACTION_WEST",       # SDL_CONTROLLER_BUTTON_X
-    3: "ACTION_NORTH",      # SDL_CONTROLLER_BUTTON_Y
-    4: "BACK",              # SDL_CONTROLLER_BUTTON_BACK
-    5: "GUIDE",             # SDL_CONTROLLER_BUTTON_GUIDE
-    6: "START",             # SDL_CONTROLLER_BUTTON_START
-    7: "LEFT_THUMB",        # SDL_CONTROLLER_BUTTON_LEFTSTICK
-    8: "RIGHT_THUMB",       # SDL_CONTROLLER_BUTTON_RIGHTSTICK
-    9: "LEFT_SHOULDER",     # SDL_CONTROLLER_BUTTON_LEFTSHOULDER
-    10: "RIGHT_SHOULDER",   # SDL_CONTROLLER_BUTTON_RIGHTSHOULDER
-    11: "DPAD_UP",          # SDL_CONTROLLER_BUTTON_DPAD_UP
+
+# XBOX 风格手柄（包括天剑等 XInput 协议手柄）的 pygame Joystick button 索引
+# 对应 Windows 下 XInput 协议手柄通过 pygame 时的实际行为
+PYGAME_BUTTON_TO_LOGICAL_XBOX = {
+    0: "ACTION_SOUTH",      # A
+    1: "ACTION_EAST",       # B
+    2: "ACTION_WEST",       # X
+    3: "ACTION_NORTH",      # Y
+    4: "LEFT_SHOULDER",     # LB ← 关键！
+    5: "RIGHT_SHOULDER",    # RB ← 关键！修复 v2.0 bug
+    6: "BACK",              # BACK / View
+    7: "START",             # START / Menu
+    8: "LEFT_THUMB",        # L3
+    9: "RIGHT_THUMB",       # R3
+    10: "GUIDE",            # XBOX Guide 键（少数手柄会暴露）
+}
+
+
+# PS 系列手柄（DualSense / DualSense Edge / DualShock 4）pygame SDL GameController button 索引
+# 参考：https://wiki.libsdl.org/SDL2/SDL_GameControllerButton
+PYGAME_BUTTON_TO_LOGICAL_PS = {
+    0: "ACTION_SOUTH",      # × / Cross
+    1: "ACTION_EAST",       # ○ / Circle
+    2: "ACTION_WEST",       # □ / Square
+    3: "ACTION_NORTH",      # △ / Triangle
+    4: "BACK",              # SHARE / CREATE
+    5: "GUIDE",             # PS Home
+    6: "START",             # OPTIONS
+    7: "LEFT_THUMB",        # L3
+    8: "RIGHT_THUMB",       # R3
+    9: "LEFT_SHOULDER",     # L1
+    10: "RIGHT_SHOULDER",   # R1
+    11: "DPAD_UP",
     12: "DPAD_DOWN",
     13: "DPAD_LEFT",
     14: "DPAD_RIGHT",
-    15: "TOUCHPAD",         # SDL_CONTROLLER_BUTTON_MISC1 / TOUCHPAD（取决于 SDL 版本）
-    16: "EDGE_FN1",         # PS5 Edge / 部分手柄会有
+    15: "TOUCHPAD",         # 触摸板按下
+    # DualSense Edge 背键
+    16: "EDGE_FN1",
     17: "EDGE_FN2",
     18: "EDGE_RB1",
     19: "EDGE_RB2",
-    20: "EDGE_RB1",         # 备用映射
+    20: "EDGE_RB1",         # 备用
     21: "EDGE_RB2",
 }
+
+
+# Switch Pro Controller（基于 SDL GameController，但部分手柄 ABXY 位置和 XBOX 不同）
+PYGAME_BUTTON_TO_LOGICAL_SWITCH = {
+    0: "ACTION_SOUTH",      # B（Switch 的下方按键）
+    1: "ACTION_EAST",       # A
+    2: "ACTION_WEST",       # Y
+    3: "ACTION_NORTH",      # X
+    4: "BACK",              # -
+    5: "GUIDE",
+    6: "START",             # +
+    7: "LEFT_THUMB",
+    8: "RIGHT_THUMB",
+    9: "LEFT_SHOULDER",     # L
+    10: "RIGHT_SHOULDER",   # R
+    11: "DPAD_UP",
+    12: "DPAD_DOWN",
+    13: "DPAD_LEFT",
+    14: "DPAD_RIGHT",
+}
+
+
+# 通用兜底（按 XBOX 风格猜测，更适合"未知 XInput 兼容手柄"）
+PYGAME_BUTTON_TO_LOGICAL_GENERIC = PYGAME_BUTTON_TO_LOGICAL_XBOX
+
+
+def get_pygame_button_map(layout: str) -> dict:
+    """根据布局返回对应的 pygame button → 逻辑名映射表"""
+    if layout == LAYOUT_XBOX:
+        return PYGAME_BUTTON_TO_LOGICAL_XBOX
+    if layout in (LAYOUT_PS, LAYOUT_PS_EDGE):
+        return PYGAME_BUTTON_TO_LOGICAL_PS
+    if layout == LAYOUT_SWITCH:
+        return PYGAME_BUTTON_TO_LOGICAL_SWITCH
+    return PYGAME_BUTTON_TO_LOGICAL_GENERIC
+
+
+# 旧的统一映射表（向后兼容用，但不推荐直接使用）
+SDL_BUTTON_TO_LOGICAL = PYGAME_BUTTON_TO_LOGICAL_PS
 
 
 # ==================== XInput 按键映射 ====================
@@ -404,11 +466,14 @@ class _PygameBackend:
                 rt_raw = float(j.get_axis(5))
                 state.rt = (rt_raw + 1.0) / 2.0
 
-            # 按键
+            # 按键 - 根据手柄布局选用对应的 button 映射表
+            # 这是 v2.0 关键修复：XBOX 手柄通过 pygame 走 Joystick API，
+            # button index 和 PS 手柄通过 SDL GameController 抽象不一样
+            button_map = get_pygame_button_map(info.layout)
             buttons = {}
             for i in range(info.num_buttons):
                 pressed = bool(j.get_button(i))
-                logical = SDL_BUTTON_TO_LOGICAL.get(i)
+                logical = button_map.get(i)
                 if logical:
                     buttons[logical] = pressed
             # DPAD 通常是 hat（在某些手柄上），如果 hat > 0 就用 hat
@@ -523,20 +588,22 @@ class ControllerManager:
         pygame_devs = self._pygame.scan() if self._pygame.is_available() else []
         xinput_devs = self._xinput.scan() if self._xinput.is_available() else []
 
-        # 2. 去重：如果一个 pygame 设备和一个 XInput 设备很可能是同一个，
-        #    优先保留 pygame 版本（更通用）
-        pygame_names_lower = [d["name"].lower() for d in pygame_devs]
+        # 2. 去重：pygame 已识别为 XBOX 风格的手柄数 = XInput 看到的设备数时，
+        #    很可能是同一批设备（XInput 协议手柄被两个驱动都看到），
+        #    保留 pygame 版本（方便 button 映射用我们的 PYGAME_*_XBOX 表读 RB/LB）
+        pygame_xbox_count = sum(
+            1 for d in pygame_devs
+            if any(k in d["name"].lower() for k in ["xbox", "x-box", "xinput",
+                   "controller for windows"]))
+
         xinput_filtered = []
-        for xd in xinput_devs:
-            # XInput 设备总是叫 "XBOX 360 兼容..."
-            # 如果 pygame 已经有相似名字的（包含 xbox），就跳过
-            duplicate = False
-            for pn in pygame_names_lower:
-                if "xbox" in pn or "x-box" in pn or "xinput" in pn:
-                    duplicate = True
-                    break
-            if not duplicate:
-                xinput_filtered.append(xd)
+        if pygame_xbox_count >= len(xinput_devs):
+            # pygame 完全覆盖了 XInput 设备，丢弃 XInput 重复项
+            pass
+        else:
+            # pygame 没全部识别到，可能有部分手柄只能用 XInput
+            # 简单策略：只跳过前 N 个（N = pygame_xbox_count），剩下的用 XInput
+            xinput_filtered = xinput_devs[pygame_xbox_count:]
 
         # 3. 合并候选列表（pygame 优先排前面）
         candidates: list[tuple[str, dict]] = []
