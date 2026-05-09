@@ -1,5 +1,5 @@
 """
-打包脚本（v2.0）
+打包脚本（v2.1）
 ================================
 把所有 Python 模块打包成 StickAnalyzer。
 
@@ -24,7 +24,7 @@ from pathlib import Path
 
 PROJECT_DIR = Path(__file__).parent.resolve()
 
-# v2.0 需要打包的模块（除了 main_gui.py 作为入口）
+# 需要打包的模块（除了 main_gui.py 作为入口）
 SUB_MODULES = [
     "analyzer.py",
     "controller_backend.py",
@@ -135,6 +135,7 @@ def choose_mode() -> str:
     print("      - 打包为文件夹，包含 StickAnalyzer.exe 和 _internal/ 目录")
     print("      - 启动速度：3-8 秒")
     print("      - 杀软误报率低")
+    print("      - 任务管理器只显示 1 个 StickAnalyzer 进程")
     print("      - 分发方式：把整个 StickAnalyzer 文件夹打包成 zip 发给用户")
     print("      - 用户解压后双击 StickAnalyzer.exe 即可")
     print()
@@ -142,6 +143,11 @@ def choose_mode() -> str:
     print("      - 打包为单个 EXE 文件")
     print("      - 启动速度：30-90 秒（首次更慢，约 1 分钟）")
     print("      - 杀软误报率较高")
+    print("      - [注意] 任务管理器会显示 2 个 StickAnalyzer 进程：")
+    print("              1 个是 PyInstaller bootloader（解压临时文件用）")
+    print("              1 个是真正的程序进程")
+    print("              这是 onefile 模式的正常机制，不是 bug。")
+    print("              但因为内存占用会翻倍，长时间运行不推荐。")
     print("      - 分发方式：直接发 EXE")
     print("      - 用户双击 EXE 即可（但要等待解压）")
     print()
@@ -266,7 +272,7 @@ def show_result(mode: str):
 def main():
     print()
     print("█" * 60)
-    print("█  摇杆射击行为分析工具 v2.0 打包脚本")
+    print("█  摇杆射击行为分析工具 v2.1 打包脚本")
     print("█" * 60)
     print()
 

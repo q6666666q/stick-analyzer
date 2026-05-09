@@ -1,5 +1,5 @@
 """
-摇杆数据记录器 v2.0
+摇杆数据记录器 v2.1
 ================================
 变化：
 - 支持配置任意按键作为"开火"和"开镜"事件
@@ -84,7 +84,7 @@ def is_button_pressed(button_name: str, buttons_dict: dict,
 
 def main():
     print("=" * 60)
-    print("  摇杆数据记录器 v2.0")
+    print("  摇杆数据记录器 v2.1")
     print("=" * 60)
     print()
     print(f"键位配置：")

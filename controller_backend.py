@@ -1,5 +1,5 @@
 """
-controller_backend.py
+controller_backend.py - v2.1
 ================================
 控制器抽象层：统一 pygame（PS/PS4/PS5/DualSense Edge/通用 HID）
 和 XInput（XBOX 系列）两种驱动，提供 4 槽位管理。
@@ -9,6 +9,13 @@ controller_backend.py
 - 4 个固定槽位，按插入顺序占位
 - 按键映射逻辑名称化（ACTION_SOUTH / EAST / WEST / NORTH ...）
 - 提供给 GUI 用于显示原生按键标签（× ○ □ △ vs A B X Y）
+
+v2.1 关键修复:
+- SDL_JOYSTICK_THREAD=1 解决跨线程 button 状态读不到的问题
+- SDL_HINT_AUTO_UPDATE_JOYSTICKS=1 + 屏蔽 joystick events
+  解决 4000-8000Hz 高回报率手柄塞爆事件队列导致 GUI 卡顿
+- 协议优先级反转：XBOX 风格手柄优先 XInput（原生协议，更稳）
+  PS / Switch / 通用 HID 仍走 pygame
 """
 from __future__ import annotations
 
@@ -19,6 +26,19 @@ from typing import Any, Optional
 
 # 静默 pygame 启动横幅
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+
+# [v2.2 关键修复] 让 SDL 起独立的 joystick 轮询线程，不依赖应用层 event.pump
+# 否则在 Windows + 第三方 XBOX 360 控制器上，跨线程读 button 状态会拿不到
+# （症状：扳机轴能读到，但 ABXY/RB/LB 等按键全失效）
+# 必须在 import pygame 之前设置才生效
+os.environ.setdefault("SDL_JOYSTICK_THREAD", "1")
+os.environ.setdefault("SDL_HINT_JOYSTICK_THREAD", "1")
+
+# [v2.3 性能修复] 高回报率手柄（4000-8000Hz）会塞爆 SDL 事件队列导致卡顿。
+# 我们用轮询方式读 axis/button state（pygame.joystick.Joystick.get_axis()
+# 直接读 SDL 内部状态），不依赖事件队列。所以可以让 SDL 自动后台更新 joystick
+# 状态，不要把 axis 移动事件推到 event queue。
+os.environ.setdefault("SDL_HINT_AUTO_UPDATE_JOYSTICKS", "1")
 
 
 # ==================== 协议常量 ====================
@@ -284,14 +304,38 @@ PYGAME_BUTTON_TO_LOGICAL_SWITCH = {
 PYGAME_BUTTON_TO_LOGICAL_GENERIC = PYGAME_BUTTON_TO_LOGICAL_XBOX
 
 
-def get_pygame_button_map(layout: str) -> dict:
-    """根据布局返回对应的 pygame button → 逻辑名映射表"""
-    if layout == LAYOUT_XBOX:
-        return PYGAME_BUTTON_TO_LOGICAL_XBOX
+def get_pygame_button_map(layout: str, num_hats: int = 0,
+                          num_buttons: int = 0) -> dict:
+    """根据布局返回对应的 pygame button → 逻辑名映射表。
+
+    [v2.1 关键修复] XBOX 风格手柄在不同 pygame/SDL 版本下有两种抽象：
+
+    1) raw Joystick 抽象（老 pygame / 非标手柄）：
+       - 方向键是独立的 hat (num_hats > 0)
+       - button 索引按厂商定义（索引 4=LB, 5=RB, 6=BACK, 7=START）
+       - 用 PYGAME_BUTTON_TO_LOGICAL_XBOX
+
+    2) SDL GameController 抽象（现代 pygame，"XBOX 360 For Windows" 等标准 SDL 名称）：
+       - 方向键被映射成普通 button (num_hats == 0)
+       - button 索引是 SDL GameController 标准（索引 9=LB, 10=RB, 11-14=DPAD）
+       - 用 PYGAME_BUTTON_TO_LOGICAL_PS（PS 路径用的就是这套标准索引）
+
+    通过 num_hats 自动判别走哪套。
+    """
     if layout in (LAYOUT_PS, LAYOUT_PS_EDGE):
         return PYGAME_BUTTON_TO_LOGICAL_PS
     if layout == LAYOUT_SWITCH:
         return PYGAME_BUTTON_TO_LOGICAL_SWITCH
+
+    # XBOX 风格 / GENERIC：根据 hat 数量自动判别抽象类型
+    if num_hats == 0 and num_buttons >= 11:
+        # SDL GameController 抽象：方向键已被映射成 button 11-14，
+        # 索引和 PS 完全一致，直接复用
+        return PYGAME_BUTTON_TO_LOGICAL_PS
+
+    # 否则走旧的 raw Joystick 索引
+    if layout == LAYOUT_XBOX:
+        return PYGAME_BUTTON_TO_LOGICAL_XBOX
     return PYGAME_BUTTON_TO_LOGICAL_GENERIC
 
 
@@ -366,6 +410,21 @@ class _PygameBackend:
             import pygame
             pygame.init()
             pygame.joystick.init()
+            # [v2.3] 禁用所有 joystick 事件类型 —— 我们用轮询方式读 state，
+            # 不需要事件队列。高回报率手柄（4000-8000Hz）会塞爆事件队列
+            # 导致 GUI 卡顿，禁用后队列保持空。
+            try:
+                pygame.event.set_blocked([
+                    pygame.JOYAXISMOTION,
+                    pygame.JOYBALLMOTION,
+                    pygame.JOYBUTTONDOWN,
+                    pygame.JOYBUTTONUP,
+                    pygame.JOYHATMOTION,
+                    pygame.JOYDEVICEADDED,
+                    pygame.JOYDEVICEREMOVED,
+                ])
+            except Exception:
+                pass  # 老版本 pygame 可能没有部分事件常量，忽略
             self._initialized = True
             return True
         except ImportError:
@@ -467,9 +526,11 @@ class _PygameBackend:
                 state.rt = (rt_raw + 1.0) / 2.0
 
             # 按键 - 根据手柄布局选用对应的 button 映射表
-            # 这是 v2.0 关键修复：XBOX 手柄通过 pygame 走 Joystick API，
-            # button index 和 PS 手柄通过 SDL GameController 抽象不一样
-            button_map = get_pygame_button_map(info.layout)
+            # [v2.1 修复] 传入 num_hats / num_buttons 让映射函数自动判别
+            # 是 raw Joystick 还是 SDL GameController 抽象
+            button_map = get_pygame_button_map(info.layout,
+                                                num_hats=info.num_hats,
+                                                num_buttons=info.num_buttons)
             buttons = {}
             for i in range(info.num_buttons):
                 pressed = bool(j.get_button(i))
@@ -588,29 +649,49 @@ class ControllerManager:
         pygame_devs = self._pygame.scan() if self._pygame.is_available() else []
         xinput_devs = self._xinput.scan() if self._xinput.is_available() else []
 
-        # 2. 去重：pygame 已识别为 XBOX 风格的手柄数 = XInput 看到的设备数时，
-        #    很可能是同一批设备（XInput 协议手柄被两个驱动都看到），
-        #    保留 pygame 版本（方便 button 映射用我们的 PYGAME_*_XBOX 表读 RB/LB）
-        pygame_xbox_count = sum(
-            1 for d in pygame_devs
-            if any(k in d["name"].lower() for k in ["xbox", "x-box", "xinput",
-                   "controller for windows"]))
+        # 2. 去重 + 优先级（v2.4 反转）:
+        #    - XBOX 风格手柄: 优先 XInput（微软原生协议，避免 pygame/SDL
+        #      在第三方 XBOX 兼容芯片上的兼容性问题；XInput-Python 直接调
+        #      Windows API，跨线程读 button 也稳）
+        #    - PS / Switch / 通用 HID 手柄: 仍走 pygame（XInput 不支持）
+        #    - 配对方式: pygame 看到的 XBOX 风格设备按顺序对应 XInput 0,1,2...
+        #      把 pygame 看到的友好名字（如 "Controller (XBOX 360 For Windows)"）
+        #      复制到 XInput 设备上，避免 GUI 显示成机械的 "兼容控制器 #0"
+        def _is_xbox_style(name: str) -> bool:
+            n = name.lower()
+            return any(k in n for k in ["xbox", "x-box", "xinput",
+                                        "controller for windows"])
 
-        xinput_filtered = []
-        if pygame_xbox_count >= len(xinput_devs):
-            # pygame 完全覆盖了 XInput 设备，丢弃 XInput 重复项
-            pass
-        else:
-            # pygame 没全部识别到，可能有部分手柄只能用 XInput
-            # 简单策略：只跳过前 N 个（N = pygame_xbox_count），剩下的用 XInput
-            xinput_filtered = xinput_devs[pygame_xbox_count:]
+        # 拆分 pygame 设备：XBOX 风格 vs 非 XBOX
+        pygame_xbox_devs = [d for d in pygame_devs if _is_xbox_style(d["name"])]
+        pygame_other_devs = [d for d in pygame_devs
+                             if not _is_xbox_style(d["name"])]
 
-        # 3. 合并候选列表（pygame 优先排前面）
+        # XBOX 风格手柄优先 XInput
+        # n_replace = 同时被两边识别的 XBOX 手柄数量（按短的那边）
+        n_replace = min(len(pygame_xbox_devs), len(xinput_devs))
+
+        xinput_used = []
+        for i in range(n_replace):
+            xinput_dev = dict(xinput_devs[i])  # 复制
+            xinput_dev["name"] = pygame_xbox_devs[i]["name"]  # 借用友好名
+            xinput_used.append(xinput_dev)
+
+        # XInput 多出来的设备（pygame 没看到，纯 XInput 路径）
+        xinput_extra = xinput_devs[n_replace:]
+        # XBOX 风格但 XInput 没识别到的（兜底走 pygame）
+        pygame_xbox_fallback = pygame_xbox_devs[n_replace:]
+
+        # 3. 合并候选列表（XInput 优先排前面）
         candidates: list[tuple[str, dict]] = []
-        for d in pygame_devs:
-            candidates.append((PROTO_PYGAME, d))
-        for d in xinput_filtered:
+        for d in xinput_used:
             candidates.append((PROTO_XINPUT, d))
+        for d in xinput_extra:
+            candidates.append((PROTO_XINPUT, d))
+        for d in pygame_xbox_fallback:
+            candidates.append((PROTO_PYGAME, d))
+        for d in pygame_other_devs:
+            candidates.append((PROTO_PYGAME, d))
 
         # 4. 保持已有槽位中"仍然在线"的设备
         #    通过 GUID（pygame）或 index（XInput）匹配
